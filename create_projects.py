@@ -3,7 +3,7 @@
 #
 # This script parses IRC logs and stores the extracted data in
 # a database
-# 
+#
 # Copyright (C) 2014 Bitergia
 #
 # This program is free software; you can redistribute it and/or modify
@@ -33,7 +33,7 @@ from optparse import OptionParser
 import os.path
 from subprocess import call
 import sys
-import urllib2, urllib
+import urllib
 from ConfigParser import SafeConfigParser
 
 def read_options():
@@ -144,13 +144,13 @@ def create_project_dirs(name, output_dir):
     """Create Automator project directories."""
 
     logging.info("Creating project: " + name)
-    if not os.path.exists(output_dir): 
+    if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     project_dir = os.path.join(output_dir,name)
-    if not os.path.exists(project_dir): 
+    if not os.path.exists(project_dir):
         os.makedirs(project_dir)
 
-    basic_dirs = ["conf","irc","json","log","production","scm","scripts","tools"]
+    basic_dirs = ["conf","irc","json","log","production","scm","scripts","tools","backups"]
 
     for dir in basic_dirs:
         new_dir = os.path.join(project_dir,dir)
@@ -172,23 +172,6 @@ def safe_git_clone(git_repo, dir_repo = ""):
     if return_code == 1:
         logging.error("Error in " + " ".join(cmd))
         sys.exit()
-
-def config_r(tools_dir):
-    # Configure R environment
-    cmd = ["R", "CMD", "INSTALL", "-l",
-           os.path.join(tools_dir,"r-lib"),
-           os.path.join(tools_dir,"GrimoireLib","vizgrimoire")]
-    r_lib_dir = os.path.join(tools_dir, "r-lib")
-    if not os.path.exists(r_lib_dir):
-        os.makedirs(r_lib_dir)
-    return_code = call(cmd)
-    if return_code == 1:
-        logging.error("Error in " + " ".join(cmd))
-        sys.exit()
-    # Legacy dir
-    legacy_link = os.path.join(tools_dir,"VizGrimoireR")
-    if not os.path.islink(legacy_link):
-        os.symlink("GrimoireLib", legacy_link)
 
 def config_viz(tools_dir):
     data_dir = os.path.join(tools_dir,"VizGrimoireJS",
@@ -221,7 +204,6 @@ def download_tools (project_name, output_dir):
         dir_repo = os.path.join(tools_dir, git)
         safe_git_clone(gits[git], dir_repo)
 
-    config_r(tools_dir)
     config_viz(tools_dir)
 
 def download_gits (git_repos, dir_project):
@@ -283,6 +265,8 @@ def get_config_generic(project_name, project_data):
         vars.append(["db_irc",db_prefix+"_irc_"+db_suffix])
     if "mediawiki_sites" in project_data:
         vars.append(["db_mediawiki",db_prefix+"_mediawiki_"+db_suffix])
+    if "sibyl_url" in project_data:
+        vars.append(["db_sibyl",db_prefix+"_sibyl_"+db_suffix])
 
     return vars
 
@@ -372,7 +356,25 @@ def get_config_mediawiki(project_data):
     ]
     return vars
 
-def get_config_r(project_data):
+def get_sibyl_backend(repos):
+    """Try to find the sibyl backend"""
+    backend = None
+    discourse_url = repos[0]+"/categories.json"
+    res = urllib.urlopen(discourse_url)
+    if res.getcode() == 200:
+        backend = "discourse"
+    return backend
+
+def get_config_sibyl(project_data):
+    vars = [
+        ["url", ",".join(project_data['sibyl_url'])],
+        ["backend",  get_sibyl_backend(project_data['sibyl_url'])],
+        ["# stackoverflow sibyl_api_key",  ""],
+        ["# stackoverflow sibyl_tags",  ""]
+    ]
+    return vars
+
+def get_config_grimoirelib(project_data):
     vars = [
             ["start_date","2010-01-01"],
             ["# end_date","2014-03-20"],
@@ -418,7 +420,7 @@ def check_config_file(project_data):
 def get_data_sources():
     """Each data source will contains repository in a comma separated list"""
     return ["source","trackers","gerrit_projects",
-            "mailing_lists","irc_channels","mediawiki_sites"]
+            "mailing_lists","irc_channels","mediawiki_sites","sibyl_url"]
 
 def create_project_config(name, project_data, output_dir):
     """Create Automator project config file."""
@@ -437,7 +439,8 @@ def create_project_config(name, project_data, output_dir):
                 ["mlstats",get_config_mlstats],
                 ["irc",get_config_irc],
                 ["mediawiki",get_config_mediawiki],
-                ["r",get_config_r],
+                ["sibyl",get_config_sibyl],
+                ["r",get_config_grimoirelib],
                 ["identities",get_config_identities],
                 ["git-production_OFF",get_config_git_production],
                 ["db-dump",get_config_db_dump],
@@ -457,6 +460,8 @@ def create_project_config(name, project_data, output_dir):
         elif section[0] == "irc" and not "irc_channels" in project_data:
             continue
         elif section[0] == "mediawiki" and not "mediawiki_sites" in project_data:
+            continue
+        elif section[0] == "sibyl" and not "sibyl_url" in project_data:
             continue
         parser.add_section(section[0])
         if section[0] == "generic":
@@ -583,7 +588,8 @@ def fill_projects(db_name, projects):
         "gerrit_projects":"scr",
         "mailing_lists":"mls",
         "irc_channels":"irc",
-        "mediawiki_sites":"mediawiki"
+        "mediawiki_sites":"mediawiki",
+        "sibyl_url":"sibyl"
     }
 
     for project in projects_db:
@@ -774,7 +780,7 @@ def create_projects_json(destdir, name):
     # JSON entry
     #"mylyn.tasks": {
     #    "parent_project": "mylyn",
-    #    "title": "Mylyn Tasks" 
+    #    "title": "Mylyn Tasks"
     # }
     # In the current implementation just one leve, all "parent_project":"root"
     q = "SELECT id, title from projects"
